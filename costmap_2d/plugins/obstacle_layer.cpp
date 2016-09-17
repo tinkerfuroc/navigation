@@ -38,6 +38,8 @@
 #include <costmap_2d/obstacle_layer.h>
 #include <costmap_2d/costmap_math.h>
 #include <pluginlib/class_list_macros.h>
+#include <boost/foreach.hpp>
+#include <cmath>
 
 PLUGINLIB_EXPORT_CLASS(costmap_2d::ObstacleLayer, costmap_2d::Layer)
 
@@ -102,6 +104,7 @@ void ObstacleLayer::onInitialize()
     source_node.param("inf_is_valid", inf_is_valid, false);
     source_node.param("clearing", clearing, false);
     source_node.param("marking", marking, true);
+    source_node.param("min_project_intensity", min_project_intensity_, 0.0);
 
     if (!sensor_frame.empty())
     {
@@ -364,6 +367,8 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
     raytraceFreespace(clearing_observations[i], min_x, min_y, max_x, max_y);
   }
 
+  std::map<int, float> map_obstacle_intensity;
+
   // place the new obstacles into a priority queue... each with a priority of zero to begin with
   for (std::vector<Observation>::const_iterator it = observations.begin(); it != observations.end(); ++it)
   {
@@ -376,6 +381,7 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
     for (unsigned int i = 0; i < cloud.points.size(); ++i)
     {
       double px = cloud.points[i].x, py = cloud.points[i].y, pz = cloud.points[i].z;
+
 
       // if the obstacle is too high or too far away from the robot we won't add it
       if (pz > max_obstacle_height_)
@@ -404,9 +410,16 @@ void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_ya
       }
 
       unsigned int index = getIndex(mx, my);
-      costmap_[index] = LETHAL_OBSTACLE;
+      map_obstacle_intensity[index] += sqrt(sq_dist);
       touch(px, py, min_x, min_y, max_x, max_y);
     }
+  }
+
+  typedef std::pair<int, float> PairIntFloat_t;
+  BOOST_FOREACH(PairIntFloat_t index_intensity, map_obstacle_intensity) {
+      if (index_intensity.second > min_project_intensity_) {
+          costmap_[index_intensity.first] = LETHAL_OBSTACLE;
+      }  
   }
 
   updateFootprint(robot_x, robot_y, robot_yaw, min_x, min_y, max_x, max_y);

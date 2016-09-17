@@ -168,6 +168,7 @@ protected:
 
   int combination_method_;
 
+  double min_project_intensity_;
 private:
   void reconfigureCB(costmap_2d::ObstaclePluginConfig &config, uint32_t level);
 };

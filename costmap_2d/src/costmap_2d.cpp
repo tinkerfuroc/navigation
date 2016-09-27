@@ -37,6 +37,7 @@
  *********************************************************************/
 #include <costmap_2d/costmap_2d.h>
 #include <cstdio>
+#include <ros/ros.h>
 
 using namespace std;
 

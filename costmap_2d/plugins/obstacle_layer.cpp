@@ -50,6 +50,10 @@ using costmap_2d::FREE_SPACE;
 using costmap_2d::ObservationBuffer;
 using costmap_2d::Observation;
 
+static inline double toRad(double degree) {
+    return degree * M_PI / 180.;
+}
+
 namespace costmap_2d
 {
 
@@ -105,6 +109,21 @@ void ObstacleLayer::onInitialize()
     source_node.param("clearing", clearing, false);
     source_node.param("marking", marking, true);
     source_node.param("min_project_intensity", min_project_intensity_, 0.0);
+
+    source_node.param("force_region_refresh", force_region_refresh_, false);
+    if (force_region_refresh_) 
+    {
+      source_node.getParam("refresh_radius_from", refresh_radius_from_);
+      source_node.getParam("refresh_radius_to", refresh_radius_to_);
+      double refresh_degree_to, refresh_degree_from;
+      source_node.getParam("refresh_degree_from", refresh_degree_from);
+      source_node.getParam("refresh_degree_to", refresh_degree_to);
+      source_node.param("refresh_poly_precision", refresh_poly_precision_, 3.0);
+      refresh_degree_from += floor((refresh_degree_to - refresh_degree_from) / 360.) * 360.;
+      refresh_rad_from_ = toRad(refresh_degree_from);
+      refresh_rad_to_ = toRad(refresh_degree_to);
+      refresh_poly_precision_ = toRad(refresh_poly_precision_);
+    }
 
     if (!sensor_frame.empty())
     {
@@ -340,6 +359,15 @@ void ObstacleLayer::pointCloud2Callback(const sensor_msgs::PointCloud2ConstPtr& 
   buffer->unlock();
 }
 
+static int toAxisID(double rad) {
+    //Axis ID:
+    //3|2
+    //----
+    //0|1
+    static int ids[4] = {0, 1, 3, 2};
+    return ids[(cos(rad) > 0) + (sin(rad) > 0) * 2];
+}
+
 void ObstacleLayer::updateBounds(double robot_x, double robot_y, double robot_yaw, double* min_x,
                                           double* min_y, double* max_x, double* max_y)
 {
@@ -539,53 +567,119 @@ void ObstacleLayer::raytraceFreespace(const Observation& clearing_observation, d
     double wx = cloud.points[i].x;
     double wy = cloud.points[i].y;
 
-    // now we also need to make sure that the enpoint we're raytracing
-    // to isn't off the costmap and scale if necessary
+    clearLine(x0, y0, ox, oy, wx, wy, clearing_observation.raytrace_range_,
+            origin_x, origin_y, map_end_x, map_end_y, min_x, min_y, max_x, max_y);
+  }
+  if (!force_region_refresh_) {
+      return;
+  }
+  double clear_from_x = cos(refresh_rad_from_);
+  double clear_from_y = sin(refresh_rad_from_);
+  double clear_to_x = cos(refresh_rad_to_);
+  double clear_to_y = sin(refresh_rad_to_);
+  int x = refresh_radius_to_ / resolution_ ;
+  int y = 0;
+  int err = 0;
+  while (x >= y) {
+      double xs[8] = {+x, +y, +x, +y, -x, -y, -x, -y};
+      double ys[8] = {+y, +x, -y, -x, +y, +x, -y, -x};
+      for (int i = 0; i < 8; i++) {
+          tryForceClearLine(clear_from_x, clear_from_y, clear_to_x, clear_to_y,
+                  ox, oy, 
+                  double(xs[i]) * resolution_, double(ys[i]) * resolution_, 
+                  clearing_observation.raytrace_range_, 
+                  origin_x, origin_y, map_end_x, map_end_y, 
+                  min_x, min_y, max_x, max_y);
+
+      }
+      y += 1;
+      err += 1 + 2 * y;
+      if (2 * (err - x) + 1 > 0) {
+          x -= 1;
+          err += 1 - 2 * x;
+      }
+  }
+}
+
+void ObstacleLayer::tryForceClearLine(double clear_from_x, double clear_from_y, 
+                                      double clear_to_x, double clear_to_y,
+                                      double ox, double oy,
+                                      double x, double y,
+                                      double raytrace_range, double start_x, double start_y,
+                                      double end_x, double end_y, double *min_x, double *min_y,
+                                      double *max_x, double *max_y) {
+    if (clear_from_x * y - x * clear_from_y < 0  ||
+        y * clear_to_x - x * clear_to_y < 0) {
+        return;
+    }
+    double x_s = ox + x * refresh_radius_from_ / refresh_radius_to_;
+    double y_s = oy + y * refresh_radius_from_ / refresh_radius_to_;
+    double x_e = ox + x;
+    double y_e = oy + y;
+    clearLine(x_s, y_s, x_e, y_e, refresh_radius_to_ + 1., 
+              start_x, start_y, end_x, end_y, 
+              min_x, min_y, max_x, max_y);
+}
+
+void ObstacleLayer::clearLine(double ox, double oy, double wx, double wy,
+                              double raytrace_range, double start_x, double start_y,
+                              double end_x, double end_y, double *min_x,
+                              double *min_y, double *max_x, double *max_y) {
+    unsigned int x0, y0;
+    if (!worldToMap(ox, oy, x0, y0)) {
+        return;
+    }
+    clearLine(x0, y0, ox, oy, wx, wy, raytrace_range, 
+            start_x, start_y, end_x, end_y, 
+            min_x, min_y, max_x, max_y);
+}
+
+void ObstacleLayer::clearLine(int x0, int y0, double ox, double oy, double wx, double wy,
+                              double raytrace_range, double start_x, double start_y,
+                              double end_x, double end_y, double *min_x,
+                              double *min_y, double *max_x, double *max_y) {
     double a = wx - ox;
     double b = wy - oy;
 
     // the minimum value to raytrace from is the origin
-    if (wx < origin_x)
-    {
-      double t = (origin_x - ox) / a;
-      wx = origin_x;
-      wy = oy + b * t;
+    if (wx < start_x) {
+        double t = (start_x - ox) / a;
+        wx = start_x;
+        wy = oy + b * t;
     }
-    if (wy < origin_y)
-    {
-      double t = (origin_y - oy) / b;
-      wx = ox + a * t;
-      wy = origin_y;
+    if (wy < start_y) {
+        double t = (start_y - oy) / b;
+        wx = ox + a * t;
+        wy = start_y;
     }
 
     // the maximum value to raytrace to is the end of the map
-    if (wx > map_end_x)
-    {
-      double t = (map_end_x - ox) / a;
-      wx = map_end_x - .001;
-      wy = oy + b * t;
+    if (wx > end_x) {
+        double t = (end_x - ox) / a;
+        wx = end_x - .001;
+        wy = oy + b * t;
     }
-    if (wy > map_end_y)
-    {
-      double t = (map_end_y - oy) / b;
-      wx = ox + a * t;
-      wy = map_end_y - .001;
+    if (wy > end_y) {
+        double t = (end_y - oy) / b;
+        wx = ox + a * t;
+        wy = end_y - .001;
     }
 
-    // now that the vector is scaled correctly... we'll get the map coordinates of its endpoint
+    // now that the vector is scaled correctly... we'll get the map coordinates
+    // of its endpoint
     unsigned int x1, y1;
 
     // check for legality just in case
-    if (!worldToMap(wx, wy, x1, y1))
-      continue;
+    if (!worldToMap(wx, wy, x1, y1)) return;
 
-    unsigned int cell_raytrace_range = cellDistance(clearing_observation.raytrace_range_);
+    unsigned int cell_raytrace_range = cellDistance(raytrace_range);
     MarkCell marker(costmap_, FREE_SPACE);
-    // and finally... we can execute our trace to clear obstacles along that line
+    // and finally... we can execute our trace to clear obstacles along that
+    // line
     raytraceLine(marker, x0, y0, x1, y1, cell_raytrace_range);
 
-    updateRaytraceBounds(ox, oy, wx, wy, clearing_observation.raytrace_range_, min_x, min_y, max_x, max_y);
-  }
+    updateRaytraceBounds(ox, oy, wx, wy, raytrace_range,
+                         min_x, min_y, max_x, max_y);
 }
 
 void ObstacleLayer::activate()
@@ -603,6 +697,7 @@ void ObstacleLayer::activate()
       observation_buffers_[i]->resetLastUpdated();
   }
 }
+
 void ObstacleLayer::deactivate()
 {
   for (unsigned int i = 0; i < observation_subscribers_.size(); ++i)

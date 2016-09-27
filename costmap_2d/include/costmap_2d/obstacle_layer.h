@@ -55,6 +55,7 @@
 #include <dynamic_reconfigure/server.h>
 #include <costmap_2d/ObstaclePluginConfig.h>
 #include <costmap_2d/footprint.h>
+#include <vector>
 
 namespace costmap_2d
 {
@@ -144,6 +145,24 @@ protected:
   void updateRaytraceBounds(double ox, double oy, double wx, double wy, double range, double* min_x, double* min_y,
                             double* max_x, double* max_y);
 
+  void clearLine(double ox, double oy, double wx, double wy,
+                 double raytrace_range, double start_x, double start_y,
+                 double end_x, double end_y, double *min_x, double *min_y,
+                 double *max_x, double *max_y);
+  
+  void clearLine(int x0, int y0, double ox, double oy, double wx, double wy,
+                 double raytrace_range, double start_x, double start_y,
+                 double end_x, double end_y, double *min_x, double *min_y,
+                 double *max_x, double *max_y);
+  void tryForceClearLine(double clear_from_x, double clear_from_y, 
+                         double clear_to_x, double clear_to_y,
+                         double ox, double oy,
+                         double x, double y,
+                         double raytrace_range, double start_x, double start_y,
+                         double end_x, double end_y, double *min_x, double *min_y,
+                         double *max_x, double *max_y);
+
+
   std::vector<geometry_msgs::Point> transformed_footprint_;
   bool footprint_clearing_enabled_;
   void updateFootprint(double robot_x, double robot_y, double robot_yaw, double* min_x, double* min_y, 
@@ -169,6 +188,13 @@ protected:
   int combination_method_;
 
   double min_project_intensity_;
+
+  bool force_region_refresh_;
+  double refresh_radius_from_;
+  double refresh_radius_to_;
+  double refresh_rad_from_;
+  double refresh_rad_to_;
+  double refresh_poly_precision_;
 private:
   void reconfigureCB(costmap_2d::ObstaclePluginConfig &config, uint32_t level);
 };

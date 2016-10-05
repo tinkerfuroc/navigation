@@ -609,9 +609,10 @@ void ObstacleLayer::tryForceClearLine(double clear_from_x, double clear_from_y,
                                       double end_x, double end_y, double *min_x, double *min_y,
                                       double *max_x, double *max_y) {
     if (clear_from_x * y - x * clear_from_y < 0  ||
-        y * clear_to_x - x * clear_to_y < 0) {
+        x * clear_to_y - y * clear_to_x < 0) {
         return;
     }
+
     double x_s = ox + x * refresh_radius_from_ / refresh_radius_to_;
     double y_s = oy + y * refresh_radius_from_ / refresh_radius_to_;
     double x_e = ox + x;
